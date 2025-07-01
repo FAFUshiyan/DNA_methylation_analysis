@@ -34,7 +34,7 @@ awk -v TOTAL="$total" '
     for (i = 1; i <= 10; i++) {
       prop = count[i] / TOTAL
       # 比例保留四位小数
-      printf "%2d×\t%d\t%.4f\n", i, count[i], prop
+      printf "%2dX\t%d\t%.4f\n", i, count[i], prop
     }
   }
 '
