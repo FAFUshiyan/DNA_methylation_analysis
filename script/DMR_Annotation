@@ -1,0 +1,112 @@
+区域级功能富集——rGREAT（hypo 与 hyper 分开）
+rGREAT 优先：GREAT 算法以区域为基本单位、利用 basal-plus-extension 的调控域模型，能自然处理远端增强子→基因的对应关系，并提供二项/超几何的区域级统计；rGREAT 支持自定义背景，非常适合 DMR【区域】分析。
+
+hypo_gr  <- import("/Users/shiyan/Downloads/DMRs_hypo.bed")         
+hyper_gr <- import("/Users/shiyan/Downloads/DMRs_hyper.bed")          
+bg_gr    <- import("/Users/shiyan/Downloads/backgroundRegions.bed")  
+
+# 选择物种基因集（hg38）；rGREAT 支持 local/online 两种模式，这里优先本地（可离线）
+species <- "hg38"
+
+# 提交 hypo DMR 的 GREAT 任务（本地 GREAT）
+job_hypo <- submitGreatJob(hypo_gr, bg = bg_gr, species = species, 
+                           request_interval = 0)  
+# submitGreatJob：把“区域集 + 背景 + 物种/基因集”提交给 GREAT 算法；
+# 这里 bg=bg_gr 把可检测区域设为背景，符合 WGBS 的可检测性原则（避免全基因组背景导致偏差）:contentReference[oaicite:5]{index=5}
+
+# 提交 hyper DMR 的 GREAT 任务
+job_hyper <- submitGreatJob(hyper_gr, bg = bg_gr, species = species, 
+                            request_interval = 0)
+
+# 提取富集结果表（包含 GO/Pathway 等多个集合）
+tab_hypo  <- getEnrichmentTables(job_hypo)   # 返回一个列表：各集合的富集表（含 P 值、FDR、fold 等）
+tab_hyper <- getEnrichmentTables(job_hyper)
+
+# 取 GO Biological Process 为例（你也可以看 KEGG/Reactome/Phenotype 等）
+ego_hypo  <- tab_hypo$`GO Biological Process`
+ego_hyper <- tab_hyper$`GO Biological Process`
+
+# 查看前若干条显著结果
+head(ego_hypo[order(ego_hypo$Hyper_Adjp_BH), c("name","Hyper_Fold_Enrichment","Hyper_Adjp_BH")], 10)
+head(ego_hyper[order(ego_hypo$Hyper_Adjp_BH), c("name","Hyper_Fold_Enrichment","Hyper_Adjp_BH")], 10)
+
+# 可视化（条形图）
+plot_great <- function(df, title){
+  top <- df %>% arrange(Hyper_Adjp_BH) %>% head(15)
+  ggplot(top, aes(x=reorder(name, -log10(Hyper_Adjp_BH)), y=-log10(Hyper_Adjp_BH))) +
+    geom_col() + coord_flip() + labs(x="", y="-log10(FDR)", title=title)
+}
+plot_great(ego_hypo,  "rGREAT: GO BP (hypoDMR)")
+plot_great(ego_hyper, "rGREAT: GO BP (hyperDMR)")
+
+基因级注释与 ORA（ChIPseeker + clusterProfiler）
+用 ChIPseeker把 DMR 映射到基因（最近 TSS/启动子/基因体等），再用 clusterProfiler::enrichGO 做过度表示分析（ORA）。
+关键：背景基因集要与注释方法一致——用背景区域经相同注释流程得到的“可被检测到/可被命中的基因”作为 universe，避免“每基因位点数/区域数不均衡”带来的偏差。
+
+# 选择 TxDb & 设定“启动子范围”（可按需求调整）
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene  # hg38 基因结构数据库
+promoter_win <- list(TSSupstream=3000, TSSdownstream=3000)  # 常用 ±3kb 作为启动子窗口
+
+# 用 ChIPseeker 注释 hypo/hyper 到“最近基因/功能域”
+anno_hypo  <- annotatePeak(hypo_gr,  TxDb=txdb, tssRegion=c(-3000, 3000), annoDb="org.Hs.eg.db")
+anno_hyper <- annotatePeak(hyper_gr, TxDb=txdb, tssRegion=c(-3000, 3000), annoDb="org.Hs.eg.db")
+# annotatePeak：把区域注释到“启动子/5'UTR/基因体/增强子候选”等并给出最近基因 ID；
+# 这是把“区域级”转换为“基因级”的标准步骤，便于与 RNA-seq/通路数据库对接。:contentReference[oaicite:10]{index=10}
+
+# 提取 Entrez Gene ID（clusterProfiler 默认用 Entrez；也可以转 SYMBOL）
+gene_hypo  <- as.data.frame(anno_hypo)$SYMBOL %>% unique()
+gene_hyper <- as.data.frame(anno_hyper)$SYMBOL %>% unique()
+
+# 构建“背景基因集”：对 bg_gr 做同样注释，得到 universe（被检测/可命中的基因）
+anno_bg   <- annotatePeak(bg_gr, TxDb=txdb, tssRegion=c(-3000, 3000), annoDb="org.Hs.eg.db")
+gene_bg   <- as.data.frame(anno_bg)$SYMBOL %>% unique()
+# 这么做的动机：保证富集检验的“样本空间”与“检测空间”一致（谁可能被命中，谁才进入背景），
+# 避免把根本“不可被 WGBS 识别到”的基因纳入背景，从而造成偏差。:contentReference[oaicite:11]{index=11}
+
+# enrichGO：对 hypo/hyper 各自做 ORA，universe=gene_bg
+ego_hypo_cp <- enrichGO(gene          = gene_hypo,
+                        universe      = gene_bg,
+                        OrgDb         = org.Hs.eg.db,
+                        keyType       = "SYMBOL",
+                        ont           = "BP",
+                        pAdjustMethod = "BH",
+                        qvalueCutoff  = 0.05)
+ego_hyper_cp <- enrichGO(gene          = gene_hyper,
+                         universe      = gene_bg,
+                         OrgDb         = org.Hs.eg.db,
+                         keyType       = "SYMBOL",
+                         ont           = "BP",
+                         pAdjustMethod = "BH",
+                         qvalueCutoff  = 0.05)
+# enrichGO 是 clusterProfiler 的 GO ORA 核心函数；用 BH 控 FDR；
+# 指定 universe 避免不恰当的全基因组背景。:contentReference[oaicite:12]{index=12}
+
+# 查看结果
+head(as.data.frame(ego_hypo_cp)[, c("ID","Description","p.adjust")], 10)
+head(as.data.frame(ego_hyper_cp)[, c("ID","Description","p.adjust")], 10)
+
+# 可视化（点图/气泡图）
+dotplot(ego_hypo_cp, showCategory = 15, title = "clusterProfiler ORA (hypoDMR)")
+dotplot(ego_hyper_cp, showCategory = 15, title = "clusterProfiler ORA (hyperDMR)")
+
+
+library(simpleCache)
+dbPath  <- "/Users/shiyan/Downloads/nm/t1/resources/regions/LOLACore/hg38"           # 这里放 Roadmap/ENCODE 等集合（LOLA 官方给了“codex”集合）
+regionDB <- loadRegionDB(dbLocation = dbPath,useCache = TRUE)  # 载入数据库索引（包含 metadata、bed 路径等）:contentReference[oaicite:19]{index=19}
+
+# 构建用户集合与背景集合
+userSets <- list(hypo=hypo_gr, hyper=hyper_gr)  # 两组分开测
+universe <- bg_gr                                # 背景=可检测区域（与 rGREAT 思路一致）
+
+# 运行富集（默认 Fisher/超几何），比较 DMR vs 各参考集合
+lola_res <- runLOLA(userSets = userSets, userUniverse = universe, regionDB = regionDB, cores = 2)
+
+# 导出 rGREAT 结果（GO BP）
+fwrite(as.data.frame(ego_hypo),  "~/Downloads/rGREAT_GO_BP_hypo.tsv",  sep="\t")
+fwrite(as.data.frame(ego_hyper), "~/Downloads/rGREAT_GO_BP_hyper.tsv", sep="\t")
+
+# 导出 clusterProfiler ORA 结果
+fwrite(as.data.frame(ego_hypo_cp),  "~/Downloads/cp_enrichGO_hypo.tsv",  sep="\t")
+fwrite(as.data.frame(ego_hyper_cp), "~/Downloads/cp_enrichGO_hyper.tsv", sep="\t")
+# 导出 LOLA top hits
+fwrite(lola_res, "~/Downloads/lola.tsv", sep="\t")
