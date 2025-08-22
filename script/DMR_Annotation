@@ -1,3 +1,11 @@
+全部在本地mac的R上执行；
+
+suppressPackageStartupMessages({
+  library(GenomicRanges); library(rtracklayer); library(IRanges)
+  library(TxDb.Hsapiens.UCSC.hg38.knownGene); library(org.Hs.eg.db)
+  library(ChIPseeker); library(clusterProfiler); library(rGREAT)
+  library(LOLA); library(data.table); library(dplyr); library(ggplot2)
+})
 区域级功能富集——rGREAT（hypo 与 hyper 分开）
 rGREAT 优先：GREAT 算法以区域为基本单位、利用 basal-plus-extension 的调控域模型，能自然处理远端增强子→基因的对应关系，并提供二项/超几何的区域级统计；rGREAT 支持自定义背景，非常适合 DMR【区域】分析。
 
